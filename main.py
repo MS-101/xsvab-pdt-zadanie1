@@ -240,10 +240,10 @@ def insert_authors(conn):
             total_time += cur_time
             cur_date = datetime.datetime.now()
 
-            total_minutes = round(total_time / 60)
-            total_seconds = round(total_time - total_time/60)
-            cur_minutes = round(cur_time / 60)
-            cur_seconds = round(cur_time - cur_time/60)
+            total_minutes = int(total_time // 60)
+            total_seconds = round(total_time) - total_minutes*60
+            cur_minutes = int(cur_time // 60)
+            cur_seconds = round(cur_time) - cur_minutes*60
             print("{}T{}Z;{:02d}:{:02d};{:02d}:{:02d}"
                   .format(cur_date.strftime("%Y-%m-%d"), cur_date.strftime("%H:%M"),
                           total_minutes, total_seconds, cur_minutes, cur_seconds))
