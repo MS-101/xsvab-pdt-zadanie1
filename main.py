@@ -66,7 +66,8 @@ def create_tables():
     """)
     cursor.execute("""
     CREATE TABLE authors(
-        id INT8 PRIMARY KEY,
+        tmp_id BIGSERIAL PRIMARY KEY,
+        id INT8,
         name VARCHAR(255),
         username VARCHAR(255),
         description TEXT,
@@ -160,7 +161,46 @@ def create_tables():
     cursor.close()
     connection.close()
 
-    header = "Main process created emtpy tables in twitter database"
+    header = "Main process created empty tables in twitter database"
+    print_execution_time(header, start_time, cur_start_time)
+
+
+def alter_tables():
+    start_time = time.time()
+    cur_start_time = start_time
+
+    print("===============")
+    print("ALTERING TABLES")
+    print("===============")
+
+    connection = psycopg2.connect(connection_string)
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+    DELETE FROM authors
+    WHERE tmp_id IN (
+        SELECT a1.tmp_id FROM authors a1
+        INNER JOIN (
+            SELECT id, COUNT(id), MIN(tmp_id) AS tmp_id
+            FROM authors
+            GROUP BY id
+            HAVING COUNT(id) > 1
+        ) a2 ON a2.id = a1.id AND a2.tmp_id != a1.tmp_id
+    )
+    """)
+    cursor.execute("""
+        ALTER TABLE authors
+            DROP CONSTRAINT authors_pkey,
+            DROP COLUMN tmp_id,
+            ADD PRIMARY KEY (id)
+    """)
+
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+    header = "Main process altered tables in twitter database"
     print_execution_time(header, start_time, cur_start_time)
 
 
@@ -262,7 +302,6 @@ def proc_insert_authors(args):
         cursor.execute(hashtags_sql_query, hashtags_tuple)
 
     if authors_insert_count > 0:
-
         authors_sql_query += "ON CONFLICT DO NOTHING"
         author_tuple = tuple(authors_insert_arr)
         cursor.execute(authors_sql_query, author_tuple)
@@ -298,6 +337,9 @@ def insert_authors():
             author_lines_count = 0
             author_lines = []
 
+    if author_lines_count > 0:
+        author_lines_arr.append(author_lines)
+
     args = [(author_lines, start_time, connection_string) for author_lines in author_lines_arr]
 
     header = "Main process read author.jsonl file"
@@ -331,26 +373,10 @@ def insert_conversations():
     connection.close()
 
 
-def proc_test(args):
-    author_lines, start_time, connection_string = args
-
-    connection = psycopg2.connect(connection_string)
-    cursor = connection.cursor()
-
-    cursor.close()
-    connection.close()
-
-
 if __name__ == '__main__':
     connection_string = "dbname=twitter user=postgres password=postgres"
-
-    # author_lines = [[1, 2, 3], [21, 22, 23], [31, 32, 33]]
-    # start_time = time.time()
-    # args = [(author_line, start_time, connection_string) for author_line in author_lines]
-    #
-    # with multiprocessing.Pool() as pool:
-    #     pool.map(proc_test, args)
 
     create_tables()
     insert_authors()
     # insert_conversations(connection)
+    alter_tables()
