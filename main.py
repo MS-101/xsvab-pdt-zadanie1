@@ -2,27 +2,35 @@ import psycopg2
 import json
 import time
 import datetime
+import multiprocessing
 
 
-def create_tables(conn):
-    cur = conn.cursor()
+def create_tables():
+    start_time = time.time()
+    cur_start_time = start_time
 
-    cur.execute("""
+    print("===============")
+    print("CREATING TABLES")
+    print("===============")
+
+    connection = psycopg2.connect(connection_string)
+    cursor = connection.cursor()
+
+    cursor.execute("""
     DROP TABLE IF EXISTS context_domains
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE context_domains(
         id INT8 PRIMARY KEY,
         name VARCHAR(255),
         description TEXT
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS context_annotations
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE context_annotations(
         id INT8 PRIMARY KEY,
         conversation_id INT8,
@@ -30,36 +38,33 @@ def create_tables(conn):
         context_entity_id INT8
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS context_entities
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE context_entities(
         id INT8 PRIMARY KEY,
         name VARCHAR(255),
         description TEXT
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS context_entities
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE context_entities(
         id INT8 PRIMARY KEY,
         name VARCHAR(255),
         description TEXT
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS authors
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE authors(
         id INT8 PRIMARY KEY,
         name VARCHAR(255),
@@ -71,35 +76,32 @@ def create_tables(conn):
         listed_count INT4
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS hashtags
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE hashtags(
         id BIGSERIAL PRIMARY KEY,
         tag TEXT
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS conversations_hashtags
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE conversations_hashtags(
         id INT8 PRIMARY KEY,
         conversation_id INT8 UNIQUE,
         hashtag_id INT8
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS annotations
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE annotations(
         id INT8 PRIMARY KEY,
         conversation_id INT8,
@@ -108,12 +110,11 @@ def create_tables(conn):
         probability numeric(4, 3)
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS links
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE links(
         id INT8 PRIMARY KEY,
         conversation_id INT8,
@@ -122,12 +123,11 @@ def create_tables(conn):
         description TEXT
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS conversation_references
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE conversation_references(
         id INT8 PRIMARY KEY,
         conversation_id INT8,
@@ -135,12 +135,11 @@ def create_tables(conn):
         type VARCHAR(20)
     )
     """)
-    conn.commit()
 
-    cur.execute("""
+    cursor.execute("""
     DROP TABLE IF EXISTS conversations
     """)
-    cur.execute("""
+    cursor.execute("""
     CREATE TABLE conversations(
         id INT8 PRIMARY KEY,
         author_id INT8,
@@ -155,27 +154,67 @@ def create_tables(conn):
         created_at TIMESTAMP WITH TIME ZONE
     )
     """)
-    conn.commit()
 
-    cur.close()
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+
+    header = "Main process created emtpy tables in twitter database"
+    print_execution_time(header, start_time, cur_start_time)
 
 
-def insert_authors(conn):
-    cur = conn.cursor()
+def print_execution_time(header, start_time, cur_start_time):
+    end_time = time.time()
+    cur_time = end_time - cur_start_time
+    total_time = end_time - start_time
+    cur_date = datetime.datetime.now()
 
-    start_time = time.time()
-    total_time = 0
+    total_minutes = int(total_time // 60)
+    total_seconds = round(total_time) - total_minutes * 60
+    cur_minutes = int(cur_time // 60)
+    cur_seconds = round(cur_time) - cur_minutes * 60
+    print("[{}]:{}T{}Z;{:02d}:{:02d};{:02d}:{:02d}"
+          .format(header, cur_date.strftime("%Y-%m-%d"), cur_date.strftime("%H:%M"),
+                  total_minutes, total_seconds, cur_minutes, cur_seconds))
 
-    inserted_count = 0
-    id_arr = []
-    for line in open('authors.jsonl', 'r'):
-        author = json.loads(line)
+    return total_time
+
+
+def proc_insert_authors(args):
+    author_lines, start_time, connection_string = args
+
+    connection = psycopg2.connect(connection_string)
+    cursor = connection.cursor()
+
+    cur_start_time = time.time()
+
+    authors_id_arr = []
+    authors_insert_count = 0
+    authors_insert_arr = []
+    authors_sql_query = """
+    INSERT INTO 
+        authors (id, name, username, description, followers_count, following_count, tweet_count, listed_count)
+    VALUES
+    """
+
+    hashtags_tag_arr = []
+    hashtags_insert_count = 0
+    hashtags_insert_arr = []
+    hashtags_sql_query = """
+    INSERT INTO
+        hashtags (tag)
+    VALUES 
+    """
+
+    for author_line in author_lines:
+        author = json.loads(author_line)
         author_public_metrics = author["public_metrics"]
 
-        id = author["id"]
-        if id in id_arr:
+        author_id = author["id"]
+        if author_id in authors_id_arr:
             continue
-        id_arr.append(id)
+        authors_id_arr.append(author_id)
 
         name = author["name"].replace("\x00", "\uFFFD")
         username = author["username"].replace("\x00", "\uFFFD")
@@ -185,31 +224,13 @@ def insert_authors(conn):
         tweet_count = author_public_metrics["tweet_count"]
         listed_count = author_public_metrics["listed_count"]
 
-        cur.execute(
-            """
-            INSERT INTO authors (
-                id,
-                name,
-                username,
-                description,
-                followers_count,
-                following_count,
-                tweet_count,
-                listed_count    
-            ) VALUES (
-                %s,
-                %s,
-                %s,
-                %s,
-                %s,
-                %s,
-                %s,
-                %s
-            )
-            """,
-            (id, name, username, description, followers_count, following_count, tweet_count, listed_count)
-        )
-        conn.commit()
+        authors_insert_arr.extend([author_id, name, username, description,
+                                   followers_count, following_count, tweet_count, listed_count])
+
+        if authors_insert_count > 0:
+            authors_sql_query += ", (%s, %s,%s, %s, %s, %s, %s, %s)"
+        else:
+            authors_sql_query += "(%s, %s,%s, %s, %s, %s, %s, %s)"
 
         author_hashtags = None
         try:
@@ -220,60 +241,116 @@ def insert_authors(conn):
         if author_hashtags is not None:
             for author_hashtag in author_hashtags:
                 tag = author_hashtag["tag"]
+                if tag in hashtags_tag_arr:
+                    continue
+                hashtags_tag_arr.append(tag)
 
-                cur.execute(
-                    """
-                    INSERT INTO hashtags (
-                        tag  
-                    ) VALUES (
-                        %s
-                    ) ON CONFLICT DO NOTHING
-                    """, (tag,)
-                )
+                hashtags_insert_arr.extend([tag])
 
-            conn.commit()
+                if hashtags_insert_count > 0:
+                    hashtags_sql_query += ", (%s)"
+                else:
+                    hashtags_sql_query += "(%s)"
 
-        inserted_count += 1
-        if inserted_count == 10000:
-            end_time = time.time()
-            cur_time = end_time - start_time
-            total_time += cur_time
-            cur_date = datetime.datetime.now()
+                hashtags_insert_count += 1
 
-            total_minutes = int(total_time // 60)
-            total_seconds = round(total_time) - total_minutes*60
-            cur_minutes = int(cur_time // 60)
-            cur_seconds = round(cur_time) - cur_minutes*60
-            print("{}T{}Z;{:02d}:{:02d};{:02d}:{:02d}"
-                  .format(cur_date.strftime("%Y-%m-%d"), cur_date.strftime("%H:%M"),
-                          total_minutes, total_seconds, cur_minutes, cur_seconds))
+        authors_insert_count += 1
 
-            start_time = time.time()
-            inserted_count = 0
+    if hashtags_insert_count > 0:
+        hashtags_sql_query += "ON CONFLICT DO NOTHING"
+        hashtags_tuple = tuple(hashtags_insert_arr)
+        cursor.execute(hashtags_sql_query, hashtags_tuple)
 
-    cur.close()
+    if authors_insert_count > 0:
+
+        authors_sql_query += "ON CONFLICT DO NOTHING"
+        author_tuple = tuple(authors_insert_arr)
+        cursor.execute(authors_sql_query, author_tuple)
+
+        connection.commit()
+        header = "Process {} processed {} author lines".format(multiprocessing.current_process().pid,
+                                                               authors_insert_count)
+        print_execution_time(header, start_time, cur_start_time)
+
+    cursor.close()
+    connection.close()
 
 
-def insert_conversations(conn):
-    cur = conn.cursor()
+def insert_authors():
+    print("=================")
+    print("INSERTING AUTHORS")
+    print("=================")
 
-    id_arr = []
-    for line in open('authors.jsonl', 'r'):
-        conversation = json.loads(line)
+    multiprocessing.current_process()
 
-        id = conversation["id"]
-        if id in id_arr:
+    start_time = time.time()
+    cur_start_time = start_time
+
+    author_lines_arr = []
+    author_lines = []
+    author_lines_count = 0
+    for author_line in open('authors.jsonl', 'r'):
+        author_lines.append(author_line)
+        author_lines_count += 1
+
+        if author_lines_count == 10000:
+            author_lines_arr.append(author_lines)
+            author_lines_count = 0
+            author_lines = []
+
+    args = [(author_lines, start_time, connection_string) for author_lines in author_lines_arr]
+
+    header = "Main process read author.jsonl file"
+    print_execution_time(header, start_time, cur_start_time)
+
+    # for author_lines in author_lines_arr:
+    #     proc_insert_authors([author_lines, start_time, connection_string])
+
+    with multiprocessing.Pool() as pool:
+        pool.map(proc_insert_authors, args)
+
+
+def insert_conversations():
+    print("=======================")
+    print("INSERTING CONVERSATIONS")
+    print("=======================")
+
+    connection = psycopg2.connect(connection_string)
+    cursor = connection.cursor()
+
+    conversations_id_arr = []
+    for conversation_line in open('authors.jsonl', 'r'):
+        conversation = json.loads(conversation_line)
+
+        conversation_id = conversation["id"]
+        if conversation_id in conversations_id_arr:
             continue
-        id_arr.append(id)
+        conversations_id_arr.append(conversation_id)
 
-    cur.close()
+    cursor.close()
+    connection.close()
+
+
+def proc_test(args):
+    author_lines, start_time, connection_string = args
+
+    connection = psycopg2.connect(connection_string)
+    cursor = connection.cursor()
+
+    cursor.close()
+    connection.close()
 
 
 if __name__ == '__main__':
-    connection = psycopg2.connect("dbname=twitter user=postgres password=postgres")
+    connection_string = "dbname=twitter user=postgres password=postgres"
 
-    create_tables(connection)
-    insert_authors(connection)
+    # author_lines = [[1, 2, 3], [21, 22, 23], [31, 32, 33]]
+    # start_time = time.time()
+    # args = [(author_line, start_time, connection_string) for author_line in author_lines]
+    #
+    # with multiprocessing.Pool() as pool:
+    #     pool.map(proc_test, args)
+
+    create_tables()
+    insert_authors()
     # insert_conversations(connection)
-
-    connection.close()
