@@ -6,12 +6,12 @@ import multiprocessing
 
 
 def create_tables():
-    start_time = time.time()
-    cur_start_time = start_time
-
     print("===============")
     print("CREATING TABLES")
     print("===============")
+
+    start_time = time.time()
+    cur_start_time = start_time
 
     connection = psycopg2.connect(connection_string)
     cursor = connection.cursor()
@@ -93,7 +93,7 @@ def create_tables():
     """)
     cursor.execute("""
     CREATE TABLE conversations_hashtags(
-        id INT8 PRIMARY KEY,
+        id BIGSERIAl PRIMARY KEY,
         conversation_id INT8 UNIQUE,
         hashtag_id INT8
     )
@@ -142,7 +142,8 @@ def create_tables():
     """)
     cursor.execute("""
     CREATE TABLE conversations(
-        id INT8 PRIMARY KEY,
+        tmp_id BIGSERIAL PRIMARY KEY,
+        id INT8,
         author_id INT8,
         content TEXT,
         possibly_sensitive BOOL,
@@ -166,15 +167,14 @@ def create_tables():
 
 
 def alter_tables():
-    start_time = time.time()
-    cur_start_time = start_time
-
     print("===============")
     print("ALTERING TABLES")
     print("===============")
 
-    connection = psycopg2.connect(connection_string)
+    start_time = time.time()
+    cur_start_time = start_time
 
+    connection = psycopg2.connect(connection_string)
     cursor = connection.cursor()
 
     cursor.execute("""
@@ -190,10 +190,23 @@ def alter_tables():
     )
     """)
     cursor.execute("""
-        ALTER TABLE authors
-            DROP CONSTRAINT authors_pkey,
-            DROP COLUMN tmp_id,
-            ADD PRIMARY KEY (id)
+    ALTER TABLE authors
+        DROP CONSTRAINT authors_pkey,
+        DROP COLUMN tmp_id,
+        ADD PRIMARY KEY (id)
+    """)
+
+    cursor.execute("""
+    DELETE FROM conversations
+    WHERE tmp_id IN (
+        SELECT c1.tmp_id FROM conversations c1
+        INNER JOIN (
+            SELECT id, COUNT(id), MIN(tmp_id) AS tmp_id
+            FROM conversations
+            GROUP BY id
+            HAVING COUNT(id) > 1
+        ) c2 ON c2.id = c1.id AND c2.tmp_id != c1.tmp_id
+    ) 
     """)
 
     connection.commit()
@@ -224,10 +237,10 @@ def print_execution_time(header, start_time, cur_start_time):
 def proc_insert_authors(args):
     author_lines, start_time, connection_string = args
 
+    cur_start_time = time.time()
+
     connection = psycopg2.connect(connection_string)
     cursor = connection.cursor()
-
-    cur_start_time = time.time()
 
     authors_id_arr = []
     authors_insert_count = 0
@@ -247,7 +260,9 @@ def proc_insert_authors(args):
     VALUES 
     """
 
+    author_lines_count = 0
     for author_line in author_lines:
+        author_lines_count += 1
         author = json.loads(author_line)
         author_public_metrics = author["public_metrics"]
 
@@ -268,19 +283,19 @@ def proc_insert_authors(args):
                                    followers_count, following_count, tweet_count, listed_count])
 
         if authors_insert_count > 0:
-            authors_sql_query += ", (%s, %s,%s, %s, %s, %s, %s, %s)"
+            authors_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s)"
         else:
-            authors_sql_query += "(%s, %s,%s, %s, %s, %s, %s, %s)"
+            authors_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s)"
 
-        author_hashtags = None
+        hashtags = None
         try:
-            author_hashtags = author["entities"]["description"]["hashtags"]
+            hashtags = author["entities"]["description"]["hashtags"]
         except KeyError:
             pass
 
-        if author_hashtags is not None:
-            for author_hashtag in author_hashtags:
-                tag = author_hashtag["tag"]
+        if hashtags is not None:
+            for hashtag in hashtags:
+                tag = hashtag["tag"]
                 if tag in hashtags_tag_arr:
                     continue
                 hashtags_tag_arr.append(tag)
@@ -297,18 +312,19 @@ def proc_insert_authors(args):
         authors_insert_count += 1
 
     if hashtags_insert_count > 0:
-        hashtags_sql_query += "ON CONFLICT DO NOTHING"
+        hashtags_sql_query += "RETURNING id ON CONFLICT DO NOTHING"
         hashtags_tuple = tuple(hashtags_insert_arr)
         cursor.execute(hashtags_sql_query, hashtags_tuple)
+        cursor.fetchall()
 
     if authors_insert_count > 0:
         authors_sql_query += "ON CONFLICT DO NOTHING"
-        author_tuple = tuple(authors_insert_arr)
-        cursor.execute(authors_sql_query, author_tuple)
+        authors_tuple = tuple(authors_insert_arr)
+        cursor.execute(authors_sql_query, authors_tuple)
 
         connection.commit()
         header = "Process {} processed {} author lines".format(multiprocessing.current_process().pid,
-                                                               authors_insert_count)
+                                                               author_lines_count)
         print_execution_time(header, start_time, cur_start_time)
 
     cursor.close()
@@ -320,7 +336,7 @@ def insert_authors():
     print("INSERTING AUTHORS")
     print("=================")
 
-    multiprocessing.current_process()
+    pool = multiprocessing.Pool()
 
     start_time = time.time()
     cur_start_time = start_time
@@ -342,26 +358,57 @@ def insert_authors():
 
     args = [(author_lines, start_time, connection_string) for author_lines in author_lines_arr]
 
-    header = "Main process read author.jsonl file"
+    author_lines_arr = []
+    author_lines = []
+    author_lines_count = 0
+
+    header = "Main process read all lines from author.jsonl file and split them amongst processes"
     print_execution_time(header, start_time, cur_start_time)
 
     # for author_lines in author_lines_arr:
     #     proc_insert_authors([author_lines, start_time, connection_string])
 
-    with multiprocessing.Pool() as pool:
-        pool.map(proc_insert_authors, args)
+    results = pool.map(proc_insert_authors, args)
 
 
-def insert_conversations():
-    print("=======================")
-    print("INSERTING CONVERSATIONS")
-    print("=======================")
+def proc_insert_conversations(args):
+    conversation_lines, start_time, connection_string = args
+
+    cur_start_time = time.time()
 
     connection = psycopg2.connect(connection_string)
     cursor = connection.cursor()
 
     conversations_id_arr = []
-    for conversation_line in open('authors.jsonl', 'r'):
+    conversations_insert_count = 0
+    conversations_insert_arr = []
+    conversations_sql_query = """
+    INSERT INTO 
+        conversations (id, author_id, content, possibly_sensitive, language, source, 
+        retweet_count, reply_count, like_count, quote_count, created_at)
+    VALUES
+    """
+
+    hashtags_tag_arr = []
+    hashtags_insert_count = 0
+    hashtags_insert_arr = []
+    hashtags_sql_query = """
+    INSERT INTO
+        hashtags (tag)
+    VALUES 
+    """
+
+    conversation_hashtags_insert_count = 0
+    conversation_hashtags_insert_arr = []
+    conversation_hashtags_sql_query = """
+    INSERT INTO
+        conversations_hashtags (conversation_id, hashtag_id)
+    VALUES
+    """
+
+    conversation_lines_count = 0
+    for conversation_line in conversation_lines:
+        conversation_lines_count += 1
         conversation = json.loads(conversation_line)
 
         conversation_id = conversation["id"]
@@ -369,14 +416,159 @@ def insert_conversations():
             continue
         conversations_id_arr.append(conversation_id)
 
+        public_metrics = conversation["public_metrics"]
+        author_id = conversation["author_id"]
+        content = conversation["text"]
+        possibly_sensitive = conversation["possibly_sensitive"]
+        language = conversation["lang"]
+        source = conversation["source"]
+        retweet_count = public_metrics["retweet_count"]
+        reply_count = public_metrics["reply_count"]
+        like_count = public_metrics["like_count"]
+        quote_count = public_metrics["quote_count"]
+        created_at = conversation["created_at"]
+
+        conversations_insert_arr.extend([conversation_id, author_id, content, possibly_sensitive, language, source,
+                                         retweet_count, reply_count, like_count, quote_count, created_at])
+
+        entities = None
+        try:
+            entities = conversation["entities"]
+        except KeyError:
+            pass
+
+        if entities is not None:
+            hashtags = None
+            try:
+                hashtags = entities["hashtags"]
+            except KeyError:
+                pass
+
+            if hashtags is not None:
+                for hashtag in hashtags:
+                    tag = hashtag["tag"]
+
+                    conversation_hashtags_insert_arr.extend([conversation_id, tag])
+                    if conversation_hashtags_insert_count > 0:
+                        conversation_hashtags_sql_query += ", (%s, (SELECT id FROM hashtags WHERE tag = %s LIMIT 1))"
+                    else:
+                        conversation_hashtags_sql_query += "(%s, (SELECT id FROM hashtags WHERE tag = %s LIMIT 1))"
+
+                    conversation_hashtags_insert_count += 1
+
+                    if tag in hashtags_tag_arr:
+                        continue
+                    hashtags_tag_arr.append(tag)
+
+                    hashtags_insert_arr.extend([tag])
+                    if hashtags_insert_count > 0:
+                        hashtags_sql_query += ", (%s)"
+                    else:
+                        hashtags_sql_query += "(%s)"
+
+                    hashtags_insert_count += 1
+
+        if conversations_insert_count > 0:
+            conversations_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        else:
+            conversations_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+
+        conversations_insert_count += 1
+
+    if hashtags_insert_count > 0:
+        hashtags_sql_query += "ON CONFLICT DO NOTHING RETURNING id"
+        hashtags_tuple = tuple(hashtags_insert_arr)
+        cursor.execute(hashtags_sql_query, hashtags_tuple)
+
+    if conversation_hashtags_insert_count > 0:
+        conversation_hashtags_sql_query += "ON CONFLICT DO NOTHING"
+        conversation_hashtags_tuple = tuple(conversation_hashtags_insert_arr)
+        cursor.execute(conversation_hashtags_sql_query, conversation_hashtags_tuple)
+
+    if conversations_insert_count > 0:
+        conversations_sql_query += "ON CONFLICT DO NOTHING"
+        conversations_tuple = tuple(conversations_insert_arr)
+        cursor.execute(conversations_sql_query, conversations_tuple)
+
+        connection.commit()
+        header = "Process {} processed {} conversation lines".format(multiprocessing.current_process().pid,
+                                                                     conversation_lines_count)
+        print_execution_time(header, start_time, cur_start_time)
+
     cursor.close()
     connection.close()
+
+
+LINES_PER_PROC = 10000
+LINES_PER_READ = 500
+
+
+def insert_conversations():
+    print("=======================")
+    print("INSERTING CONVERSATIONS")
+    print("=======================")
+
+    pool = multiprocessing.Pool()
+
+    start_time = time.time()
+    cur_start_time = start_time
+
+    conversation_lines_arr_count = 0
+    conversation_lines_arr = []
+    conversation_lines = []
+    conversation_lines_count = 0
+    for conversation_line in open('conversations.jsonl', 'r'):
+        conversation_lines.append(conversation_line)
+        conversation_lines_count += 1
+
+        if conversation_lines_count == LINES_PER_PROC:
+            conversation_lines_arr_count += 1
+            conversation_lines_arr.append(conversation_lines)
+
+            conversation_lines_count = 0
+            conversation_lines = []
+
+            if conversation_lines_arr_count == LINES_PER_READ:
+                args = [(conversation_lines, start_time, connection_string) for conversation_lines in
+                        conversation_lines_arr]
+
+                header = "Main process read {} * {} lines from conversations.jsonl file and" \
+                         " split them amongst processes".format(LINES_PER_READ, LINES_PER_PROC)
+                print_execution_time(header, start_time, cur_start_time)
+
+                for conversation_lines in conversation_lines_arr:
+                    proc_insert_conversations([conversation_lines, start_time, connection_string])
+
+                conversation_lines_arr_count = 0
+                conversation_lines_arr = []
+
+                # results = pool.map(proc_insert_conversations, args)
+
+                cur_start_time = time.time()
+
+    if conversation_lines_count > 0:
+        conversation_lines_arr.append(conversation_lines)
+
+        conversation_lines_count = 0
+        conversation_lines = []
+
+    if conversation_lines_arr_count > 0:
+        args = [(conversation_lines, start_time, connection_string) for conversation_lines in conversation_lines_arr]
+
+        header = "Main process read {} * {} lines from conversations.jsonl file and" \
+                 " split them amongst processes".format(conversation_lines_arr_count, LINES_PER_PROC)
+        print_execution_time(header, start_time, cur_start_time)
+
+        conversation_lines_arr_count = 0
+        conversation_lines_arr = []
+
+        results = pool.map(proc_insert_conversations, args)
 
 
 if __name__ == '__main__':
     connection_string = "dbname=twitter user=postgres password=postgres"
 
     create_tables()
-    insert_authors()
-    # insert_conversations(connection)
-    alter_tables()
+    # insert_authors()
+    insert_conversations()
+    # alter_tables()
