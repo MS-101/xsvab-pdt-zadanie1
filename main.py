@@ -21,7 +21,7 @@ def create_tables():
     """)
     cursor.execute("""
     CREATE TABLE context_annotations(
-        id INT8 PRIMARY KEY,
+        id BIGSERIAL PRIMARY KEY,
         conversation_id INT8 NOT NULL,
         context_domain_id INT8 NOT NULL,
         context_entity_id INT8 NOT NULL
@@ -33,7 +33,8 @@ def create_tables():
     """)
     cursor.execute("""
     CREATE TABLE context_domains(
-        id INT8 PRIMARY KEY,
+        tmp_id BIGSERIAL PRIMARY KEY,
+        id INT8 NOT NULL,
         name VARCHAR(255) NOT NULL,
         description TEXT
     )
@@ -44,7 +45,8 @@ def create_tables():
     """)
     cursor.execute("""
     CREATE TABLE context_entities(
-        id INT8 PRIMARY KEY,
+        tmp_id BIGSERIAL PRIMARY KEY,
+        id INT8 NOT NULL,
         name VARCHAR(255) NOT NULL,
         description TEXT
     )
@@ -61,10 +63,10 @@ def create_tables():
     """)
 
     cursor.execute("""
-    DROP TABLE IF EXISTS conversations_hashtags
+    DROP TABLE IF EXISTS conversation_hashtags
     """)
     cursor.execute("""
-    CREATE TABLE conversations_hashtags(
+    CREATE TABLE conversation_hashtags(
         id BIGSERIAl PRIMARY KEY,
         conversation_id INT8,
         hashtag_id INT8
@@ -115,6 +117,7 @@ def create_tables():
     cursor.execute("""
     CREATE TABLE conversations(
         tmp_id BIGSERIAL PRIMARY KEY,
+        process_order INT8 NOT NULL,
         id INT8 NOT NULL,
         author_id INT8 NOT NULL,
         content TEXT NOT NULL,
@@ -135,6 +138,7 @@ def create_tables():
     cursor.execute("""
     CREATE TABLE authors(
         tmp_id BIGSERIAL PRIMARY KEY,
+        process_order INT8 NOT NULL,
         id INT8,
         name VARCHAR(255),
         username VARCHAR(255),
@@ -166,37 +170,83 @@ def alter_tables():
     connection = psycopg2.connect(connection_string)
     cursor = connection.cursor()
 
-    cursor.execute("""
-    DELETE FROM authors
-    WHERE tmp_id IN (
-        SELECT a1.tmp_id FROM authors a1
-        INNER JOIN (
-            SELECT id, COUNT(id), MIN(tmp_id) AS tmp_id
-            FROM authors
-            GROUP BY id
-            HAVING COUNT(id) > 1
-        ) a2 ON a2.id = a1.id AND a2.tmp_id != a1.tmp_id
-    )
-    """)
-    cursor.execute("""
-    ALTER TABLE authors
-        DROP CONSTRAINT authors_pkey,
-        DROP COLUMN tmp_id,
-        ADD PRIMARY KEY (id)
-    """)
+    # cursor.execute("""
+    # DELETE FROM authors
+    # WHERE tmp_id IN (
+    #     SELECT a1.tmp_id FROM authors a1
+    #     INNER JOIN (
+    #         SELECT id, COUNT(id), MIN(process_order) AS min_process_order
+    #         FROM authors
+    #         GROUP BY id
+    #         HAVING COUNT(id) > 1
+    #     ) a2 ON a2.id = a1.id AND a2.min_process_order != a1.process_order
+    # )
+    # """)
+    # cursor.execute("""
+    # ALTER TABLE authors
+    #     DROP CONSTRAINT authors_pkey,
+    #     ADD PRIMARY KEY (id)
+    #     DROP COLUMN tmp_id,
+    # """)
+    #
+    # cursor.execute("""
+    # DELETE FROM conversations
+    # WHERE tmp_id IN (
+    #     SELECT c1.process_order FROM conversations c1
+    #     INNER JOIN (
+    #         SELECT id, COUNT(id), MIN(process_order) AS min_process_order
+    #         FROM conversations
+    #         GROUP BY id
+    #         HAVING COUNT(id) > 1
+    #     ) c2 ON c2.id = c1.id AND c2.min_process_order != c1.process_order
+    # )
+    # """)
+    # cursor.execute("""
+    # ALTER TABLE conversations
+    #     DROP CONSTRAINT conversations_pkey,
+    #     ADD PRIMARY KEY (id)
+    #     DROP COLUMN tmp_id,
+    # """)
+    #
+    # cursor.execute("""
+    # DELETE FROM hashtags
+    # WHERE id IN (
+    #     SELECT h1.id FROM hashtags h1
+    #     INNER JOIN (
+    #         SELECT tag, COUNT(tag), MIN(id) AS min_id
+    #         FROM hashtags
+    #         GROUP BY tag
+    #         HAVING COUNT(tag) > 1
+    #     ) h2 ON h2.tag = h1.tag AND h2.min_id != h1.id
+    # )
+    # """)
+    # cursor.execute("""
+    # ALTER TABLE hashtags
+    #     ADD UNIQUE(tag)
+    # """)
+    #
+    # connection.commit()
 
     cursor.execute("""
-    DELETE FROM conversations
-    WHERE tmp_id IN (
-        SELECT c1.tmp_id FROM conversations c1
-        INNER JOIN (
-            SELECT id, COUNT(id), MIN(tmp_id) AS tmp_id
-            FROM conversations
-            GROUP BY id
-            HAVING COUNT(id) > 1
-        ) c2 ON c2.id = c1.id AND c2.tmp_id != c1.tmp_id
-    ) 
+    SELECT id, tag
+    FROM hashtags
     """)
+
+    hashtag_rows = cursor.fetchall()
+    for hashtag_row in hashtag_rows:
+        if hashtag_row is None:
+            break
+
+        cursor.execute("""
+        UPDATE conversation_hashtags
+        SET hashtag_id = %s
+        WHERE tmp_hashtag = %s
+        """, (hashtag_row[0], hashtag_row[1]))
+
+    # cursor.execute("""
+    # ALTER TABLE conversation_hashtags
+    #     DROP COLUMN tmp_hashtag,
+    # """)
 
     connection.commit()
     cursor.close()
@@ -224,7 +274,7 @@ def print_execution_time(header, start_time, cur_start_time):
 
 
 def proc_insert_authors(args):
-    author_lines, start_time, connection_string = args
+    author_lines, process_order, start_time, connection_string = args
 
     cur_start_time = time.time()
 
@@ -236,7 +286,7 @@ def proc_insert_authors(args):
     authors_insert_arr = []
     authors_sql_query = """
     INSERT INTO 
-        authors (id, name, username, description, followers_count, following_count, tweet_count, listed_count)
+        authors (process_order, id, name, username, description, followers_count, following_count, tweet_count, listed_count)
     VALUES
     """
 
@@ -268,13 +318,13 @@ def proc_insert_authors(args):
         tweet_count = author_public_metrics["tweet_count"]
         listed_count = author_public_metrics["listed_count"]
 
-        authors_insert_arr.extend([author_id, name, username, description,
+        authors_insert_arr.extend([process_order, author_id, name, username, description,
                                    followers_count, following_count, tweet_count, listed_count])
 
         if authors_insert_count > 0:
-            authors_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s)"
+            authors_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         else:
-            authors_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s)"
+            authors_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s, %s)"
 
         hashtags = None
         try:
@@ -301,20 +351,17 @@ def proc_insert_authors(args):
         authors_insert_count += 1
 
     if hashtags_insert_count > 0:
-        hashtags_sql_query += "RETURNING id ON CONFLICT DO NOTHING"
+        hashtags_sql_query += "ON CONFLICT DO NOTHING"
         hashtags_tuple = tuple(hashtags_insert_arr)
         cursor.execute(hashtags_sql_query, hashtags_tuple)
-        cursor.fetchall()
 
     if authors_insert_count > 0:
-        authors_sql_query += "ON CONFLICT DO NOTHING"
         authors_tuple = tuple(authors_insert_arr)
         cursor.execute(authors_sql_query, authors_tuple)
-
         connection.commit()
-        header = "Process {} processed {} author lines".format(multiprocessing.current_process().pid,
-                                                               author_lines_count)
-        print_execution_time(header, start_time, cur_start_time)
+
+    header = "Process {} processed {} author lines".format(multiprocessing.current_process().pid, author_lines_count)
+    print_execution_time(header, start_time, cur_start_time)
 
     cursor.close()
     connection.close()
@@ -345,23 +392,23 @@ def insert_authors():
     if author_lines_count > 0:
         author_lines_arr.append(author_lines)
 
-    args = [(author_lines, start_time, connection_string) for author_lines in author_lines_arr]
-
-    author_lines_arr = []
-    author_lines = []
-    author_lines_count = 0
+    process_order = 0
+    args = []
+    for author_lines in author_lines_arr:
+        args.append((author_lines, process_order, start_time, connection_string))
+        process_order += 1
 
     header = "Main process read all lines from author.jsonl file and split them amongst processes"
     print_execution_time(header, start_time, cur_start_time)
 
-    # for author_lines in author_lines_arr:
-    #     proc_insert_authors([author_lines, start_time, connection_string])
+    for author_lines in author_lines_arr:
+        proc_insert_authors([author_lines, process_order, start_time, connection_string])
 
-    results = pool.map(proc_insert_authors, args)
+    # results = pool.map(proc_insert_authors, args)
 
 
 def proc_insert_conversations(args):
-    conversation_lines, start_time, connection_string = args
+    conversation_lines, process_order, start_time, connection_string = args
 
     cur_start_time = time.time()
 
@@ -373,7 +420,7 @@ def proc_insert_conversations(args):
     conversations_insert_arr = []
     conversations_sql_query = """
     INSERT INTO 
-        conversations (id, author_id, content, possibly_sensitive, language, source, 
+        conversations (process_order, id, author_id, content, possibly_sensitive, language, source, 
         retweet_count, reply_count, like_count, quote_count, created_at)
     VALUES
     """
@@ -391,7 +438,7 @@ def proc_insert_conversations(args):
     conversation_hashtags_insert_arr = []
     conversation_hashtags_sql_query = """
     INSERT INTO
-        conversations_hashtags (conversation_id, hashtag_id)
+        conversation_hashtags (conversation_id, hashtag_id)
     VALUES
     """
 
@@ -419,6 +466,21 @@ def proc_insert_conversations(args):
     VALUES
     """
 
+    context_annotations_conversation_id_arr = []
+    context_annotations_insert_count = 0
+    context_domains_insert_arr = []
+    context_entities_insert_arr = []
+    context_domains_sql_query = """
+    INSERT INTO
+        context_domains (id, name, description)
+    VALUES
+    """
+    context_entities_sql_query = """
+    INSERT INTO
+        context_entities (id, name, description)
+    VALUES
+    """
+
     conversation_lines_count = 0
     for conversation_line in conversation_lines:
         conversation_lines_count += 1
@@ -441,7 +503,7 @@ def proc_insert_conversations(args):
         quote_count = public_metrics["quote_count"]
         created_at = conversation["created_at"]
 
-        conversations_insert_arr.extend([conversation_id, author_id, content, possibly_sensitive, language, source,
+        conversations_insert_arr.extend([process_order, conversation_id, author_id, content, possibly_sensitive, language, source,
                                          retweet_count, reply_count, like_count, quote_count, created_at])
 
         entities = None
@@ -548,10 +610,54 @@ def proc_insert_conversations(args):
 
                     conversation_references_insert_count += 1
 
+            context_annotations = None
+            try:
+                context_annotations = conversation["context_annotations"]
+            except KeyError:
+                pass
+
+            if context_annotations is not None:
+                for context_annotation in context_annotations:
+                    domain = context_annotation["domain"]
+
+                    domain_id = domain["id"]
+                    domain_name = domain["name"]
+                    domain_description = None
+                    try:
+                        domain_description = domain["description"]
+                    except KeyError:
+                        pass
+
+                    context_domains_insert_arr.extend([domain_id, domain_name, domain_description])
+                    if context_annotations_insert_count > 0:
+                        context_domains_sql_query += ", (%s, %s, %s)"
+                    else:
+                        context_domains_sql_query += "(%s, %s, %s)"
+
+                    entity = context_annotation["entity"]
+
+                    entity_id = entity["id"]
+                    entity_name = entity["name"]
+                    entity_description = None
+                    try:
+                        entity_description = entity["description"]
+                    except KeyError:
+                        pass
+
+                    context_entities_insert_arr.extend([entity_id, entity_name, entity_description])
+                    if context_annotations_insert_count > 0:
+                        context_entities_sql_query += ", (%s, %s, %s)"
+                    else:
+                        context_entities_sql_query += "(%s, %s, %s)"
+
+                    context_annotations_conversation_id_arr.append(conversation_id)
+
+                    context_annotations_insert_count += 1
+
         if conversations_insert_count > 0:
-            conversations_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            conversations_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         else:
-            conversations_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            conversations_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
 
         conversations_insert_count += 1
 
@@ -559,7 +665,6 @@ def proc_insert_conversations(args):
         hashtags_sql_query += "ON CONFLICT DO NOTHING"
         hashtags_tuple = tuple(hashtags_insert_arr)
         cursor.execute(hashtags_sql_query, hashtags_tuple)
-        connection.commit()
 
     if conversation_hashtags_insert_count > 0:
         select_hashtags_id_query_args = []
@@ -599,6 +704,35 @@ def proc_insert_conversations(args):
         conversation_references_tuple = tuple(conversation_references_insert_arr)
         cursor.execute(conversation_references_sql_query, conversation_references_tuple)
 
+    if context_annotations_insert_count > 0:
+        context_domains_sql_query += " returning id"
+        context_domains_tuple = tuple(context_domains_insert_arr)
+        cursor.execute(context_domains_sql_query, context_domains_tuple)
+        context_domains_rows = cursor.fetchall()
+
+        context_entities_sql_query += " returning id"
+        context_entities_tuple = tuple(context_entities_insert_arr)
+        cursor.execute(context_entities_sql_query, context_entities_tuple)
+        context_entities_rows = cursor.fetchall()
+
+        context_annotations_query = """
+        INSERT INTO
+            context_annotations(conversation_id, context_domain_id, context_entity_id)
+        VALUES
+        """
+        context_annotations_arr = [0 for _ in range(context_annotations_insert_count*3)]
+        for i in range(context_annotations_insert_count):
+            context_annotations_arr[3 * i] = context_annotations_conversation_id_arr[i]
+            context_annotations_arr[3 * i + 1] = context_domains_rows[i][0]
+            context_annotations_arr[3 * i + 2] = context_entities_rows[i][0]
+            if i > 0:
+                context_annotations_query += ", (%s, %s, %s)"
+            else:
+                context_annotations_query += "(%s, %s, %s)"
+        context_annotations_tuple = tuple(context_annotations_arr)
+
+        cursor.execute(context_annotations_query, context_annotations_tuple)
+
     if conversations_insert_count > 0:
         conversations_tuple = tuple(conversations_insert_arr)
         cursor.execute(conversations_sql_query, conversations_tuple)
@@ -630,6 +764,7 @@ def insert_conversations():
     conversation_lines_arr = []
     conversation_lines = []
     conversation_lines_count = 0
+    process_order = 0
     for conversation_line in open('conversations.jsonl', 'r'):
         conversation_lines.append(conversation_line)
         conversation_lines_count += 1
@@ -642,15 +777,17 @@ def insert_conversations():
             conversation_lines = []
 
             if conversation_lines_arr_count == LINES_PER_READ:
-                args = [(conversation_lines, start_time, connection_string) for conversation_lines in
-                        conversation_lines_arr]
+                args = []
+                for conversation_lines in conversation_lines_arr:
+                    args.append((conversation_lines, process_order, start_time, connection_string))
+                    process_order += 1
 
                 header = "Main process read {} * {} lines from conversations.jsonl file and" \
                          " split them amongst processes".format(LINES_PER_READ, LINES_PER_PROC)
                 print_execution_time(header, start_time, cur_start_time)
 
                 for conversation_lines in conversation_lines_arr:
-                    proc_insert_conversations([conversation_lines, start_time, connection_string])
+                    proc_insert_conversations([conversation_lines, process_order, start_time, connection_string])
 
                 conversation_lines_arr_count = 0
                 conversation_lines_arr = []
@@ -666,7 +803,10 @@ def insert_conversations():
         conversation_lines = []
 
     if conversation_lines_arr_count > 0:
-        args = [(conversation_lines, start_time, connection_string) for conversation_lines in conversation_lines_arr]
+        args = []
+        for conversation_lines in conversation_lines_arr:
+            args.append((conversation_lines, process_order, start_time, connection_string))
+            process_order += 1
 
         header = "Main process read {} * {} lines from conversations.jsonl file and" \
                  " split them amongst processes".format(conversation_lines_arr_count, LINES_PER_PROC)
@@ -682,6 +822,6 @@ if __name__ == '__main__':
     connection_string = "dbname=twitter user=postgres password=postgres"
 
     create_tables()
-    # insert_authors()
+    insert_authors()
     insert_conversations()
     # alter_tables()
