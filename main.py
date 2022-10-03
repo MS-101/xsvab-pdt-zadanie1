@@ -17,47 +17,115 @@ def create_tables():
     cursor = connection.cursor()
 
     cursor.execute("""
-    DROP TABLE IF EXISTS context_domains
-    """)
-    cursor.execute("""
-    CREATE TABLE context_domains(
-        id INT8 PRIMARY KEY,
-        name VARCHAR(255),
-        description TEXT
-    )
-    """)
-
-    cursor.execute("""
     DROP TABLE IF EXISTS context_annotations
     """)
     cursor.execute("""
     CREATE TABLE context_annotations(
         id INT8 PRIMARY KEY,
+        conversation_id INT8 NOT NULL,
+        context_domain_id INT8 NOT NULL,
+        context_entity_id INT8 NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS context_domains
+    """)
+    cursor.execute("""
+    CREATE TABLE context_domains(
+        id INT8 PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS context_entities
+    """)
+    cursor.execute("""
+    CREATE TABLE context_entities(
+        id INT8 PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS hashtags
+    """)
+    cursor.execute("""
+    CREATE TABLE hashtags(
+        id BIGSERIAL PRIMARY KEY,
+        tag TEXT UNIQUE
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS conversations_hashtags
+    """)
+    cursor.execute("""
+    CREATE TABLE conversations_hashtags(
+        id BIGSERIAl PRIMARY KEY,
         conversation_id INT8,
-        context_domain_id INT8,
-        context_entity_id INT8
+        hashtag_id INT8
     )
     """)
 
     cursor.execute("""
-    DROP TABLE IF EXISTS context_entities
+    DROP TABLE IF EXISTS annotations
     """)
     cursor.execute("""
-    CREATE TABLE context_entities(
-        id INT8 PRIMARY KEY,
-        name VARCHAR(255),
+    CREATE TABLE annotations(
+        id BIGSERIAL PRIMARY KEY NOT NULL,
+        conversation_id INT8 NOT NULL,
+        value TEXT NOT NULL,
+        type TEXT NOT NULL,
+        probability numeric(4, 3) NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS links
+    """)
+    cursor.execute("""
+    CREATE TABLE links(
+        id BIGSERIAL PRIMARY KEY,
+        conversation_id INT8 NOT NULL,
+        url VARCHAR(2048) NOT NULL,
+        title TEXT,
         description TEXT
     )
     """)
 
     cursor.execute("""
-    DROP TABLE IF EXISTS context_entities
+    DROP TABLE IF EXISTS conversation_references
     """)
     cursor.execute("""
-    CREATE TABLE context_entities(
-        id INT8 PRIMARY KEY,
-        name VARCHAR(255),
-        description TEXT
+    CREATE TABLE conversation_references(
+        id BIGSERIAl PRIMARY KEY,
+        conversation_id INT8 NOT NULL,
+        parent_id INT8 NOT NULL,
+        type VARCHAR(20) NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS conversations
+    """)
+    cursor.execute("""
+    CREATE TABLE conversations(
+        tmp_id BIGSERIAL PRIMARY KEY,
+        id INT8 NOT NULL,
+        author_id INT8 NOT NULL,
+        content TEXT NOT NULL,
+        possibly_sensitive BOOL NOT NULL,
+        language VARCHAR(3) NOT NULL,
+        source TEXT NOT NULL,
+        retweet_count INT4,
+        reply_count INT4,
+        like_count INT4,
+        quote_count INT4,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL
     )
     """)
 
@@ -75,85 +143,6 @@ def create_tables():
         following_count INT4,
         tweet_count INT4,
         listed_count INT4
-    )
-    """)
-
-    cursor.execute("""
-    DROP TABLE IF EXISTS hashtags
-    """)
-    cursor.execute("""
-    CREATE TABLE hashtags(
-        id BIGSERIAL PRIMARY KEY,
-        tag TEXT
-    )
-    """)
-
-    cursor.execute("""
-    DROP TABLE IF EXISTS conversations_hashtags
-    """)
-    cursor.execute("""
-    CREATE TABLE conversations_hashtags(
-        id BIGSERIAl PRIMARY KEY,
-        conversation_id INT8 UNIQUE,
-        hashtag_id INT8
-    )
-    """)
-
-    cursor.execute("""
-    DROP TABLE IF EXISTS annotations
-    """)
-    cursor.execute("""
-    CREATE TABLE annotations(
-        id INT8 PRIMARY KEY,
-        conversation_id INT8,
-        value TEXT,
-        type TEXT,
-        probability numeric(4, 3)
-    )
-    """)
-
-    cursor.execute("""
-    DROP TABLE IF EXISTS links
-    """)
-    cursor.execute("""
-    CREATE TABLE links(
-        id INT8 PRIMARY KEY,
-        conversation_id INT8,
-        url VARCHAR(2048),
-        title TEXT,
-        description TEXT
-    )
-    """)
-
-    cursor.execute("""
-    DROP TABLE IF EXISTS conversation_references
-    """)
-    cursor.execute("""
-    CREATE TABLE conversation_references(
-        id INT8 PRIMARY KEY,
-        conversation_id INT8,
-        parent_id INT8,
-        type VARCHAR(20)
-    )
-    """)
-
-    cursor.execute("""
-    DROP TABLE IF EXISTS conversations
-    """)
-    cursor.execute("""
-    CREATE TABLE conversations(
-        tmp_id BIGSERIAL PRIMARY KEY,
-        id INT8,
-        author_id INT8,
-        content TEXT,
-        possibly_sensitive BOOL,
-        language VARCHAR(3),
-        source TEXT,
-        retweet_count INT4,
-        reply_count INT4,
-        like_count INT4,
-        quote_count INT4,
-        created_at TIMESTAMP WITH TIME ZONE
     )
     """)
 
@@ -271,8 +260,8 @@ def proc_insert_authors(args):
             continue
         authors_id_arr.append(author_id)
 
-        name = author["name"].replace("\x00", "\uFFFD")
-        username = author["username"].replace("\x00", "\uFFFD")
+        name = author["name"].replace("\x00", "\uFFFD")[:255]
+        username = author["username"].replace("\x00", "\uFFFD")[:255]
         description = author["username"].replace("\x00", "\uFFFD")
         followers_count = author_public_metrics["followers_count"]
         following_count = author_public_metrics["following_count"]
@@ -406,6 +395,30 @@ def proc_insert_conversations(args):
     VALUES
     """
 
+    annotations_insert_count = 0
+    annotations_insert_arr = []
+    annotations_sql_query = """
+    INSERT INTO
+        annotations (conversation_id, value, type, probability)
+    VALUES
+    """
+
+    links_insert_count = 0
+    links_insert_arr = []
+    links_sql_query = """
+    INSERT INTO
+        links (conversation_id, url, title, description)
+    VALUES
+    """
+
+    conversation_references_insert_count = 0
+    conversation_references_insert_arr = []
+    conversation_references_sql_query = """
+    INSERT INTO
+        conversation_references (conversation_id, parent_id, type)
+    VALUES
+    """
+
     conversation_lines_count = 0
     for conversation_line in conversation_lines:
         conversation_lines_count += 1
@@ -468,6 +481,73 @@ def proc_insert_conversations(args):
 
                     hashtags_insert_count += 1
 
+            annotations = None
+            try:
+                annotations = entities["annotations"]
+            except KeyError:
+                pass
+
+            if annotations is not None:
+                for annotation in annotations:
+                    value = annotation["normalized_text"]
+                    type = annotation["type"]
+                    probability = annotation["probability"]
+
+                    annotations_insert_arr.extend([conversation_id, value, type, probability])
+                    if annotations_insert_count > 0:
+                        annotations_sql_query += ", (%s, %s, %s, %s)"
+                    else:
+                        annotations_sql_query += "(%s, %s, %s, %s)"
+
+                    annotations_insert_count += 1
+
+            links = None
+            try:
+                links = entities["urls"]
+            except KeyError:
+                pass
+
+            if links is not None:
+                for link in links:
+                    url = link["expanded_url"][:2048]
+                    title = None
+                    try:
+                        title = link["title"]
+                    except KeyError:
+                        pass
+                    description = None
+                    try:
+                        description = link["description"]
+                    except KeyError:
+                        pass
+
+                    links_insert_arr.extend([conversation_id, url, title, description])
+                    if links_insert_count > 0:
+                        links_sql_query += ", (%s, %s, %s, %s)"
+                    else:
+                        links_sql_query += "(%s, %s, %s, %s)"
+
+                    links_insert_count += 1
+
+            referenced_tweets = None
+            try:
+                referenced_tweets = conversation["referenced_tweets"]
+            except KeyError:
+                pass
+
+            if referenced_tweets is not None:
+                for referenced_tweet in referenced_tweets:
+                    parent_id = referenced_tweet["id"]
+                    type = referenced_tweet["type"][:20]
+
+                    conversation_references_insert_arr.extend([conversation_id, parent_id, type])
+                    if conversation_references_insert_count > 0:
+                        conversation_references_sql_query += ", (%s, %s, %s)"
+                    else:
+                        conversation_references_sql_query += "(%s, %s, %s)"
+
+                    conversation_references_insert_count += 1
+
         if conversations_insert_count > 0:
             conversations_sql_query += ", (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         else:
@@ -504,12 +584,22 @@ def proc_insert_conversations(args):
                     = hashtags_dict[conversation_hashtag_insert_val]
             conversation_hashtags_insert_key += 1
 
-        conversation_hashtags_sql_query += "ON CONFLICT DO NOTHING"
         conversation_hashtags_tuple = tuple(conversation_hashtags_insert_arr)
         cursor.execute(conversation_hashtags_sql_query, conversation_hashtags_tuple)
 
+    if annotations_insert_count > 0:
+        annotations_tuple = tuple(annotations_insert_arr)
+        cursor.execute(annotations_sql_query, annotations_tuple)
+
+    if links_insert_count > 0:
+        links_tuple = tuple(links_insert_arr)
+        cursor.execute(links_sql_query, links_tuple)
+
+    if conversation_references_insert_count > 0:
+        conversation_references_tuple = tuple(conversation_references_insert_arr)
+        cursor.execute(conversation_references_sql_query, conversation_references_tuple)
+
     if conversations_insert_count > 0:
-        conversations_sql_query += "ON CONFLICT DO NOTHING"
         conversations_tuple = tuple(conversations_insert_arr)
         cursor.execute(conversations_sql_query, conversations_tuple)
 
@@ -590,21 +680,6 @@ def insert_conversations():
 
 if __name__ == '__main__':
     connection_string = "dbname=twitter user=postgres password=postgres"
-
-    connection = psycopg2.connect(connection_string)
-    cursor = connection.cursor()
-
-    # sql_query = "SELECT id FROM hashtags WHERE tag IN (%s, %s)"
-    # sql_args = ['Ukraine', 'biden']
-    # sql_tuple = tuple(sql_args)
-    #
-    # cursor.execute(sql_query, sql_tuple)
-    # results = cursor.fetchall()
-    # for result in results:
-    #     print(result[0])
-
-    cursor.close()
-    connection.close()
 
     create_tables()
     # insert_authors()
