@@ -389,7 +389,7 @@ def proc_insert_conversations(args):
     VALUES
     """
 
-    hashtags_tag_arr = []
+    hashtags_dict = {}
     hashtags_insert_count = 0
     hashtags_insert_arr = []
     hashtags_sql_query = """
@@ -450,15 +450,15 @@ def proc_insert_conversations(args):
 
                     conversation_hashtags_insert_arr.extend([conversation_id, tag])
                     if conversation_hashtags_insert_count > 0:
-                        conversation_hashtags_sql_query += ", (%s, (SELECT id FROM hashtags WHERE tag = %s LIMIT 1))"
+                        conversation_hashtags_sql_query += ", (%s, %s)"
                     else:
-                        conversation_hashtags_sql_query += "(%s, (SELECT id FROM hashtags WHERE tag = %s LIMIT 1))"
+                        conversation_hashtags_sql_query += "(%s, %s)"
 
                     conversation_hashtags_insert_count += 1
 
-                    if tag in hashtags_tag_arr:
+                    if tag in hashtags_dict.keys():
                         continue
-                    hashtags_tag_arr.append(tag)
+                    hashtags_dict[tag] = 0
 
                     hashtags_insert_arr.extend([tag])
                     if hashtags_insert_count > 0:
@@ -476,11 +476,34 @@ def proc_insert_conversations(args):
         conversations_insert_count += 1
 
     if hashtags_insert_count > 0:
-        hashtags_sql_query += "ON CONFLICT DO NOTHING RETURNING id"
+        hashtags_sql_query += "ON CONFLICT DO NOTHING"
         hashtags_tuple = tuple(hashtags_insert_arr)
         cursor.execute(hashtags_sql_query, hashtags_tuple)
+        connection.commit()
 
     if conversation_hashtags_insert_count > 0:
+        select_hashtags_id_query_args = []
+        select_hashtags_id_query = "SELECT id, tag FROM hashtags WHERE tag IN ("
+
+        for hashtag_tag in hashtags_dict.keys():
+            select_hashtags_id_query += "%s,"
+            select_hashtags_id_query_args.append(hashtag_tag)
+        select_hashtags_id_query = select_hashtags_id_query[:-1]
+        select_hashtags_id_query += ")"
+
+        cursor.execute(select_hashtags_id_query, tuple(select_hashtags_id_query_args))
+        hashtag_id_rows = cursor.fetchall()
+
+        for hashtag_id_row in hashtag_id_rows:
+            hashtags_dict[hashtag_id_row[1]] = hashtag_id_row[0]
+
+        conversation_hashtags_insert_key = 0
+        for conversation_hashtag_insert_val in conversation_hashtags_insert_arr:
+            if (conversation_hashtags_insert_key % 2) == 1:
+                conversation_hashtags_insert_arr[conversation_hashtags_insert_key] \
+                    = hashtags_dict[conversation_hashtag_insert_val]
+            conversation_hashtags_insert_key += 1
+
         conversation_hashtags_sql_query += "ON CONFLICT DO NOTHING"
         conversation_hashtags_tuple = tuple(conversation_hashtags_insert_arr)
         cursor.execute(conversation_hashtags_sql_query, conversation_hashtags_tuple)
@@ -567,6 +590,21 @@ def insert_conversations():
 
 if __name__ == '__main__':
     connection_string = "dbname=twitter user=postgres password=postgres"
+
+    connection = psycopg2.connect(connection_string)
+    cursor = connection.cursor()
+
+    # sql_query = "SELECT id FROM hashtags WHERE tag IN (%s, %s)"
+    # sql_args = ['Ukraine', 'biden']
+    # sql_tuple = tuple(sql_args)
+    #
+    # cursor.execute(sql_query, sql_tuple)
+    # results = cursor.fetchall()
+    # for result in results:
+    #     print(result[0])
+
+    cursor.close()
+    connection.close()
 
     create_tables()
     # insert_authors()
