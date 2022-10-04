@@ -7,13 +7,14 @@ import bisect
 
 
 LINES_PER_PROC = 10000
+MAX_ARRAY_SIZE = 500000000
 
-authors_id_arr = []
-hashtags_id_arr = []
-hashtags_tag_arr = []
-conversations_id_arr = []
-context_domains_id_arr = []
-context_entities_id_arr = []
+authors_id_arr = {}
+hashtags_tag_arr = {}
+hashtags_id_arr = {}
+conversations_id_arr = {}
+context_domains_id_arr = {}
+context_entities_id_arr = {}
 
 
 def print_execution_time(start_time, cur_start_time, file_output):
@@ -206,7 +207,6 @@ def proc_insert_authors(args):
     VALUES
     """
 
-    hashtags_key_arr = []
     hashtags_insert_count = 0
     hashtags_insert_arr = []
     hashtags_sql_query = """
@@ -219,15 +219,13 @@ def proc_insert_authors(args):
     for author_line in author_lines:
         author_lines_count += 1
         author = json.loads(author_line)
-        author_public_metrics = author["public_metrics"]
 
         author_id = author["id"]
-        author_id_key = bisect.bisect_left(authors_id_arr, author_id)
-        if author_id_key < len(authors_id_arr):
-            if authors_id_arr[author_id_key] == author_id:
-                continue
-        authors_id_arr.insert(author_id_key, author_id)
+        if author_id in authors_id_arr:
+            continue
+        authors_id_arr[author_id] = True
 
+        author_public_metrics = author["public_metrics"]
         name = author["name"].replace("\x00", "\uFFFD")[:255]
         username = author["username"].replace("\x00", "\uFFFD")[:255]
         description = author["username"].replace("\x00", "\uFFFD")
@@ -254,12 +252,9 @@ def proc_insert_authors(args):
             for hashtag in hashtags:
                 tag = hashtag["tag"]
 
-                hashtag_tag_key = bisect.bisect_left(hashtags_tag_arr, tag)
-                if hashtag_tag_key < len(hashtags_tag_arr):
-                    if hashtags_tag_arr[hashtag_tag_key] == tag:
-                        continue
-                hashtags_key_arr.append(hashtag_tag_key)
-                hashtags_tag_arr.insert(hashtag_tag_key, tag)
+                if tag in hashtags_tag_arr:
+                    continue
+                hashtags_tag_arr[tag] = True
 
                 hashtags_insert_arr.append(tag)
                 if hashtags_insert_count > 0:
@@ -276,11 +271,11 @@ def proc_insert_authors(args):
         cursor.execute(hashtags_sql_query, hashtags_tuple)
         hashtag_ids = cursor.fetchall()
 
-        hashtag_key_id = 0
+        hashtag_insert_arr_key = 0
         for hashtag_id in hashtag_ids:
-            hashtag_key = hashtags_key_arr[hashtag_key_id]
-            hashtags_id_arr.insert(hashtag_key, hashtag_id)
-            hashtag_key_id += 1
+            hashtag_tag = hashtags_insert_arr[hashtag_insert_arr_key]
+            hashtags_id_arr[hashtag_tag] = hashtag_id
+            hashtag_insert_arr_key += 1
 
     if authors_insert_count > 0:
         authors_tuple = tuple(authors_insert_arr)
@@ -328,8 +323,8 @@ def proc_insert_conversations(args):
     conversations_insert_count = 0
     conversations_insert_arr = []
     conversations_sql_query = """
-    INSERT INTO 
-        conversations (id, author_id, content, possibly_sensitive, language, source, 
+    INSERT INTO
+        conversations (id, author_id, content, possibly_sensitive, language, source,
         retweet_count, reply_count, like_count, quote_count, created_at)
     VALUES
     """
@@ -413,21 +408,17 @@ def proc_insert_conversations(args):
         conversation = json.loads(conversation_line)
 
         conversation_id = conversation["id"]
-        conversation_id_key = bisect.bisect_left(authors_id_arr, conversation_id)
-        if conversation_id_key < len(authors_id_arr):
-            if conversations_id_arr[conversation_id_key] == conversation_id:
-                continue
-        conversations_id_arr.insert(conversation_id_key, conversation_id)
+        if conversation_id in conversations_id_arr:
+            continue
+        conversations_id_arr[conversation_id] = True
 
         author_not_found = True
         author_id = conversation["author_id"]
-        author_id_key = bisect.bisect_left(authors_id_arr, author_id)
-        if author_id_key < len(authors_id_arr):
-            if authors_id_arr[author_id_key] == author_id:
-                author_not_found = False
+        if author_id in authors_id_arr:
+            author_not_found = False
 
         if author_not_found:
-            authors_id_arr.insert(author_id_key, author_id)
+            authors_id_arr[author_id] = True
 
             name = None
             username = None
@@ -484,22 +475,17 @@ def proc_insert_conversations(args):
                         conversation_hashtags_sql_query += ", (%s, %s)"
                     else:
                         conversation_hashtags_sql_query += "(%s, %s)"
-
                     conversation_hashtags_insert_count += 1
 
-                    hashtag_tag_key = bisect.bisect_left(hashtags_tag_arr, tag)
-                    if hashtag_tag_key < len(hashtags_tag_arr):
-                        if hashtags_tag_arr[hashtag_tag_key] == tag:
-                            continue
-                    hashtags_key_arr.append(hashtag_tag_key)
-                    hashtags_tag_arr.insert(hashtag_tag_key, tag)
+                    if tag in hashtags_tag_arr:
+                        continue
+                    hashtags_tag_arr[tag] = True
 
                     hashtags_insert_arr.extend([tag])
                     if hashtags_insert_count > 0:
                         hashtags_sql_query += ", (%s)"
                     else:
                         hashtags_sql_query += "(%s)"
-
                     hashtags_insert_count += 1
 
             annotations = None
@@ -582,13 +568,11 @@ def proc_insert_conversations(args):
                     domain_id = domain["id"]
 
                     context_domain_not_inserted = True
-                    context_domains_id_key = bisect.bisect_left(context_domains_id_arr, domain_id)
-                    if context_domains_id_key < len(context_domains_id_arr):
-                        if context_domains_id_arr[context_domains_id_key] == domain_id:
-                            context_domain_not_inserted = False
+                    if domain_id in context_domains_id_arr:
+                        context_domain_not_inserted = False
 
                     if context_domain_not_inserted:
-                        context_domains_id_arr.insert(context_domains_id_key, domain_id)
+                        context_domains_id_arr[domain_id] = True
 
                         domain_name = domain["name"]
                         domain_description = None
@@ -610,13 +594,11 @@ def proc_insert_conversations(args):
                     entity_id = entity["id"]
 
                     context_entity_not_inserted = True
-                    context_entities_id_key = bisect.bisect_left(context_entities_id_arr, entity_id)
-                    if context_entities_id_key < len(context_entities_id_arr):
-                        if context_entities_id_arr[context_entities_id_key] == entity_id:
-                            context_entity_not_inserted = False
+                    if entity_id in context_entities_id_arr:
+                        context_entity_not_inserted = False
 
                     if context_entity_not_inserted:
-                        context_entities_id_arr.insert(context_entities_id_key, entity_id)
+                        context_entities_id_arr[entity_id] = True
 
                         entity_name = entity["name"]
                         entity_description = None
@@ -653,17 +635,16 @@ def proc_insert_conversations(args):
         cursor.execute(hashtags_sql_query, hashtags_tuple)
         hashtag_ids = cursor.fetchall()
 
-        hashtag_key_id = 0
+        hashtag_insert_arr_key = 0
         for hashtag_id in hashtag_ids:
-            hashtag_key = hashtags_key_arr[hashtag_key_id]
-            hashtags_id_arr.insert(hashtag_key, hashtag_id)
-            hashtag_key_id += 1
+            hashtag_tag = hashtags_insert_arr[hashtag_insert_arr_key]
+            hashtags_id_arr[hashtag_tag] = hashtag_id
+            hashtag_insert_arr_key += 1
 
     if conversation_hashtags_insert_count > 0:
         for conversation_hashtags_insert_arr_id in range(conversation_hashtags_insert_count):
             hashtag_tag = conversation_hashtags_insert_arr[2*conversation_hashtags_insert_arr_id + 1]
-            hashtag_tag_key = bisect.bisect_left(hashtags_tag_arr, hashtag_tag)
-            hashtag_id = hashtags_id_arr[hashtag_tag_key]
+            hashtag_id = hashtags_id_arr[hashtag_tag]
             conversation_hashtags_insert_arr[2*conversation_hashtags_insert_arr_id + 1] = hashtag_id
 
         conversation_hashtags_tuple = tuple(conversation_hashtags_insert_arr)
@@ -742,7 +723,7 @@ if __name__ == '__main__':
     cursor = connection.cursor()
 
     create_tables()
-    insert_authors()
+    # insert_authors()
     insert_conversations()
     # alter_tables()
 
