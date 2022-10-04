@@ -3,7 +3,6 @@ import json
 import time
 import datetime
 import csv
-import bisect
 
 
 LINES_PER_PROC = 10000
@@ -723,7 +722,7 @@ if __name__ == '__main__':
     cursor = connection.cursor()
 
     create_tables()
-    # insert_authors()
+    insert_authors()
     insert_conversations()
     # alter_tables()
 
