@@ -815,7 +815,7 @@ def insert_conversations():
         conversation_lines_arr_count = 0
         conversation_lines_arr = []
 
-        results = pool.map(proc_insert_conversations, args)
+        # results = pool.map(proc_insert_conversations, args)
 
 
 if __name__ == '__main__':
@@ -823,5 +823,5 @@ if __name__ == '__main__':
 
     create_tables()
     insert_authors()
-    insert_conversations()
+    # insert_conversations()
     # alter_tables()
