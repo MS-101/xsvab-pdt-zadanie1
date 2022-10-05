@@ -10,7 +10,6 @@ MAX_ARRAY_SIZE = 500000000
 
 authors_id_arr = {}
 hashtags_tag_arr = {}
-hashtags_id_arr = {}
 conversations_id_arr = {}
 context_domains_id_arr = {}
 context_entities_id_arr = {}
@@ -188,6 +187,65 @@ def alter_tables():
     start_time = time.time()
     cur_start_time = start_time
 
+    cursor.execute("""
+    DELETE FROM conversation_references
+    WHERE id IN (
+        SELECT conversation_references.id FROM conversation_references
+        LEFT JOIN conversations on conversations.id = conversation_references.parent_id
+        WHERE conversations.id IS NULL
+    )
+    """)
+
+    cursor.execute("""
+    ALTER TABLE conversations
+    ADD FOREIGN KEY (author_id) REFERENCES authors(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE conversation_hashtags
+    ADD FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE conversation_hashtags
+    ADD FOREIGN KEY (hashtag_id) REFERENCES hashtags(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE annotations
+    ADD FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE links
+    ADD FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE conversation_references
+    ADD FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE conversation_references
+    ADD FOREIGN KEY (parent_id) REFERENCES conversations(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE context_annotations
+    ADD FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE context_annotations
+    ADD FOREIGN KEY (context_domain_id) REFERENCES context_domains(id)
+    """)
+
+    cursor.execute("""
+    ALTER TABLE context_annotations
+    ADD FOREIGN KEY (context_entity_id) REFERENCES context_entities(id)
+    """)
+
     connection.commit()
 
     print_execution_time(start_time, cur_start_time, None)
@@ -206,17 +264,7 @@ def proc_insert_authors(args):
     VALUES
     """
 
-    hashtags_insert_count = 0
-    hashtags_insert_arr = []
-    hashtags_sql_query = """
-    INSERT INTO
-        hashtags (tag)
-    VALUES 
-    """
-
-    author_lines_count = 0
     for author_line in author_lines:
-        author_lines_count += 1
         author = json.loads(author_line)
 
         author_id = author["id"]
@@ -241,40 +289,7 @@ def proc_insert_authors(args):
         else:
             authors_sql_query += "(%s, %s, %s, %s, %s, %s, %s, %s)"
 
-        hashtags = None
-        try:
-            hashtags = author["entities"]["description"]["hashtags"]
-        except KeyError:
-            pass
-
-        if hashtags is not None:
-            for hashtag in hashtags:
-                tag = hashtag["tag"]
-
-                if tag in hashtags_tag_arr:
-                    continue
-                hashtags_tag_arr[tag] = True
-
-                hashtags_insert_arr.append(tag)
-                if hashtags_insert_count > 0:
-                    hashtags_sql_query += ", (%s)"
-                else:
-                    hashtags_sql_query += "(%s)"
-                hashtags_insert_count += 1
-
         authors_insert_count += 1
-
-    if hashtags_insert_count > 0:
-        hashtags_sql_query += " RETURNING id"
-        hashtags_tuple = tuple(hashtags_insert_arr)
-        cursor.execute(hashtags_sql_query, hashtags_tuple)
-        hashtag_ids = cursor.fetchall()
-
-        hashtag_insert_arr_key = 0
-        for hashtag_id in hashtag_ids:
-            hashtag_tag = hashtags_insert_arr[hashtag_insert_arr_key]
-            hashtags_id_arr[hashtag_tag] = hashtag_id
-            hashtag_insert_arr_key += 1
 
     if authors_insert_count > 0:
         authors_tuple = tuple(authors_insert_arr)
@@ -289,10 +304,10 @@ def insert_authors():
     print("INSERTING AUTHORS")
     print("=================")
 
-    authors_output = open('authors.csv', 'w')
+    authors_output = open('authors.csv', 'w', encoding="utf-8")
 
     writer = csv.writer(authors_output)
-    authors_output_header = ["datum; celkovy cas; aktualny_cas"]
+    authors_output_header = ["datum;celkovy_cas;aktualny_cas"]
     writer.writerow(authors_output_header)
 
     start_time = time.time()
@@ -336,7 +351,6 @@ def proc_insert_conversations(args):
     VALUES
     """
 
-    hashtags_key_arr = []
     hashtags_insert_count = 0
     hashtags_insert_arr = []
     hashtags_sql_query = """
@@ -401,9 +415,7 @@ def proc_insert_conversations(args):
     VALUES
     """
 
-    conversation_lines_count = 0
     for conversation_line in conversation_lines:
-        conversation_lines_count += 1
         conversation = json.loads(conversation_line)
 
         conversation_id = conversation["id"]
@@ -478,7 +490,7 @@ def proc_insert_conversations(args):
 
                     if tag in hashtags_tag_arr:
                         continue
-                    hashtags_tag_arr[tag] = True
+                    hashtags_tag_arr[tag] = 0
 
                     hashtags_insert_arr.extend([tag])
                     if hashtags_insert_count > 0:
@@ -496,10 +508,10 @@ def proc_insert_conversations(args):
             if annotations is not None:
                 for annotation in annotations:
                     value = annotation["normalized_text"]
-                    type = annotation["type"]
+                    annotations_type = annotation["type"]
                     probability = annotation["probability"]
 
-                    annotations_insert_arr.extend([conversation_id, value, type, probability])
+                    annotations_insert_arr.extend([conversation_id, value, annotations_type, probability])
                     if annotations_insert_count > 0:
                         annotations_sql_query += ", (%s, %s, %s, %s)"
                     else:
@@ -515,7 +527,10 @@ def proc_insert_conversations(args):
 
             if links is not None:
                 for link in links:
-                    url = link["expanded_url"][:2048]
+                    url = link["expanded_url"]
+                    if len(url) > 2048:
+                        continue
+
                     title = None
                     try:
                         title = link["title"]
@@ -544,9 +559,9 @@ def proc_insert_conversations(args):
             if referenced_tweets is not None:
                 for referenced_tweet in referenced_tweets:
                     parent_id = referenced_tweet["id"]
-                    type = referenced_tweet["type"][:20]
+                    referenced_tweet_type = referenced_tweet["type"][:20]
 
-                    conversation_references_insert_arr.extend([conversation_id, parent_id, type])
+                    conversation_references_insert_arr.extend([conversation_id, parent_id, referenced_tweet_type])
                     if conversation_references_insert_count > 0:
                         conversation_references_sql_query += ", (%s, %s, %s)"
                     else:
@@ -637,13 +652,13 @@ def proc_insert_conversations(args):
         hashtag_insert_arr_key = 0
         for hashtag_id in hashtag_ids:
             hashtag_tag = hashtags_insert_arr[hashtag_insert_arr_key]
-            hashtags_id_arr[hashtag_tag] = hashtag_id
+            hashtags_tag_arr[hashtag_tag] = hashtag_id
             hashtag_insert_arr_key += 1
 
     if conversation_hashtags_insert_count > 0:
         for conversation_hashtags_insert_arr_id in range(conversation_hashtags_insert_count):
             hashtag_tag = conversation_hashtags_insert_arr[2*conversation_hashtags_insert_arr_id + 1]
-            hashtag_id = hashtags_id_arr[hashtag_tag]
+            hashtag_id = hashtags_tag_arr[hashtag_tag]
             conversation_hashtags_insert_arr[2*conversation_hashtags_insert_arr_id + 1] = hashtag_id
 
         conversation_hashtags_tuple = tuple(conversation_hashtags_insert_arr)
@@ -692,10 +707,10 @@ def insert_conversations():
 
     start_time = time.time()
 
-    conversations_output = open('conversations.csv', 'w')
+    conversations_output = open('conversations.csv', 'w', encoding="utf-8")
 
     writer = csv.writer(conversations_output)
-    conversations_output_header = ["datum; celkovy cas; aktualny_cas"]
+    conversations_output_header = ["datum;celkovy_cas;aktualny_cas"]
     writer.writerow(conversations_output_header)
 
     conversation_lines = []
@@ -724,7 +739,7 @@ if __name__ == '__main__':
     create_tables()
     insert_authors()
     insert_conversations()
-    # alter_tables()
+    alter_tables()
 
     connection.close()
     cursor.close()
