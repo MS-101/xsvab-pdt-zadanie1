@@ -81,16 +81,6 @@ def create_tables():
     """)
 
     cursor.execute("""
-    DROP TABLE IF EXISTS hashtags
-    """)
-    cursor.execute("""
-    CREATE TABLE hashtags(
-        id BIGSERIAL PRIMARY KEY,
-        tag TEXT UNIQUE
-    )
-    """)
-
-    cursor.execute("""
     DROP TABLE IF EXISTS conversation_hashtags
     """)
     cursor.execute("""
@@ -98,6 +88,16 @@ def create_tables():
         id BIGSERIAl PRIMARY KEY,
         conversation_id INT8,
         hashtag_id INT8
+    )
+    """)
+
+    cursor.execute("""
+    DROP TABLE IF EXISTS hashtags
+    """)
+    cursor.execute("""
+    CREATE TABLE hashtags(
+        id BIGSERIAL PRIMARY KEY,
+        tag TEXT UNIQUE
     )
     """)
 
